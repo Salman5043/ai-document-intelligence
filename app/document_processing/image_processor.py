@@ -18,6 +18,33 @@ SUPPORTED_IMAGES = {
     ".tif",
 }
 
+MAX_OCR_DIMENSION = 2500
+
+
+def prepare_image_for_ocr(frame: Image.Image) -> Image.Image:
+    """
+    Prepare an image frame for OCR while controlling memory usage.
+    Preserve aspect ratio and avoid unnecessary upscaling.
+    """
+    image = frame.copy()
+
+    try:
+        image.thumbnail(
+            (MAX_OCR_DIMENSION, MAX_OCR_DIMENSION),
+            Image.Resampling.LANCZOS,
+        )
+
+        if image.mode != "RGB":
+            converted = image.convert("RGB")
+            image.close()
+            image = converted
+
+        return image
+
+    except Exception:
+        image.close()
+        raise
+
 
 def process_image(file_path: str | Path) -> DocumentContent:
     path = Path(file_path)
@@ -42,16 +69,25 @@ def process_image(file_path: str | Path) -> DocumentContent:
             for index, frame in enumerate(
                 ImageSequence.Iterator(image)
             ):
-                text = extract_image_text(frame.copy())
+                ocr_image = None
 
-                pages.append({
-                    "page_number": index + 1,
-                    "text": text,
-                    "extraction_method": "ocr",
-                    "character_count": len(text),
-                })
+                try:
+                    ocr_image = prepare_image_for_ocr(frame)
 
-                all_text.append(text)
+                    text = extract_image_text(ocr_image)
+
+                    pages.append({
+                        "page_number": index + 1,
+                        "text": text,
+                        "extraction_method": "ocr",
+                        "character_count": len(text),
+                    })
+
+                    all_text.append(text)
+
+                finally:
+                    if ocr_image is not None:
+                        ocr_image.close()
 
         return DocumentContent(
             filename=path.name,

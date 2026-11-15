@@ -104,6 +104,11 @@ class Document(Base):
         cascade="all, delete-orphan",
     )
 
+    storage_path: Mapped[str | None] = mapped_column(
+    String(500),
+    nullable=True,
+    )
+
 
 class Invoice(Base):
     __tablename__ = "invoices"
@@ -240,6 +245,7 @@ class ProcessingEvent(Base):
 
     status: Mapped[str] = mapped_column(
         String(30),
+        default="uploaded",
         nullable=False,
     )
 
