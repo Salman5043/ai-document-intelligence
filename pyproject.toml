@@ -1,0 +1,42 @@
+[project]
+name = "ai-document-intelligence"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Salman Sayem", email = "sayem.salman.504@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "celery>=5.7.0",
+    "easyocr>=1.7.2",
+    "fastapi>=0.162.7",
+    "httpx>=0.28.1",
+    "langchain-core>=1.8.0",
+    "langchain-groq>=1.1.3",
+    "langgraph>=1.2.21",
+    "openpyxl>=3.1.5",
+    "pandas>=3.1.1",
+    "pdfplumber>=0.11.10",
+    "pgvector>=0.5.1",
+    "pillow>=13.0.0",
+    "psycopg[binary]>=3.3.9",
+    "pydantic>=2.14.3",
+    "pydantic-settings>=2.16.3",
+    "pymupdf>=2.1",
+    "pytest>=9.2.0",
+    "python-dotenv>=1.2.4",
+    "python-multipart>=0.0.33",
+    "redis>=8.1.0",
+    "ruff>=0.17.5",
+    "sqlalchemy>=2.1.8",
+    "uvicorn[standard]>=0.54.0",
+    "xlrd>=2.0.2",
+]
+
+[project.scripts]
+ai-document-intelligence = "ai_document_intelligence:main"
+
+[build-system]
+requires = ["uv_build>=0.11.15,<0.12.0"]
+build-backend = "uv_build"
