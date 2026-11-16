@@ -11,7 +11,9 @@ from fastapi import (
     Query,
     UploadFile,
 )
+from kombu.exceptions import KombuError
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.database.models import Document, Invoice
@@ -19,11 +21,11 @@ from app.database.search import keyword_search, semantic_search
 from app.database.session import get_db
 from app.workers.tasks import process_uploaded_document
 
-
 router = APIRouter(
     prefix="/documents",
     tags=["Documents"],
 )
+
 
 ALLOWED_EXTENSIONS = {
     ".pdf",
@@ -76,6 +78,7 @@ async def upload_document(
 
     size = 0
 
+    # Save the uploaded file in chunks.
     try:
         with file_path.open("wb") as destination:
             while chunk := await file.read(1024 * 1024):
@@ -90,12 +93,14 @@ async def upload_document(
                 destination.write(chunk)
 
     except Exception:
+        # Cleanup boundary: remove partially uploaded files.
         file_path.unlink(missing_ok=True)
         raise
 
     finally:
         await file.close()
 
+    # Create the document database record.
     document = Document(
         filename=original_filename,
         file_type=extension.lstrip("."),
@@ -103,20 +108,36 @@ async def upload_document(
         status="uploaded",
     )
 
+    # Step 1: Save the document record.
     try:
         db.add(document)
         db.commit()
         db.refresh(document)
 
-        process_uploaded_document.delay(document.id)
-
-    except Exception:
+    except SQLAlchemyError as exc:
         db.rollback()
         file_path.unlink(missing_ok=True)
+
+        raise HTTPException(
+            status_code=503,
+            detail="Could not save document information.",
+        ) from exc
+
+    # Step 2: Submit document processing task to Celery.
+    try:
+        process_uploaded_document.delay(document.id)
+
+    except KombuError as exc:
+        document.status = "failed"
+        document.errors = [
+            "Could not queue document processing."
+        ]
+        db.commit()
+
         raise HTTPException(
             status_code=503,
             detail="Could not queue document processing.",
-        )
+        ) from exc
 
     return {
         "document_id": document.id,
@@ -203,7 +224,10 @@ def get_document_result(
 @router.get("/search")
 def search_documents(
     q: str = Query(..., min_length=1),
-    mode: str = Query(default="keyword", pattern="^(keyword|semantic)$"),
+    mode: str = Query(
+        default="keyword",
+        pattern="^(keyword|semantic)$",
+    ),
     limit: int = Query(default=10, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
@@ -245,7 +269,10 @@ def reprocess_document(
             detail="Document not found.",
         )
 
-    if not document.storage_path or not Path(document.storage_path).exists():
+    if (
+        not document.storage_path
+        or not Path(document.storage_path).exists()
+    ):
         raise HTTPException(
             status_code=404,
             detail="Original uploaded file is unavailable.",
@@ -267,16 +294,21 @@ def reprocess_document(
 
     db.commit()
 
+    # Submit reprocessing task to Celery.
     try:
         process_uploaded_document.delay(document.id)
-    except Exception:
+
+    except KombuError as exc:
         document.status = "failed"
+        document.errors = [
+            "Could not queue document for reprocessing."
+        ]
         db.commit()
 
         raise HTTPException(
             status_code=503,
             detail="Could not queue document for reprocessing.",
-        )
+        ) from exc
 
     return {
         "document_id": document.id,

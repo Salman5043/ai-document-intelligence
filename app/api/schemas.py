@@ -1,21 +1,20 @@
 
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class InvoiceCorrection(BaseModel):
-    invoice_number: Optional[str] = None
-    invoice_date: Optional[str] = None
-    supplier_name: Optional[str] = None
-    customer_name: Optional[str] = None
+    invoice_number: str | None = None
+    invoice_date: str | None = None
+    supplier_name: str | None = None
+    customer_name: str | None = None
 
-    subtotal: Optional[float] = None
-    tax: Optional[float] = None
-    total: Optional[float] = None
-    currency: Optional[str] = None
+    subtotal: float | None = None
+    tax: float | None = None
+    total: float | None = None
+    currency: str | None = None
 
-    line_items: Optional[list[dict]] = None
+    line_items: list[dict] | None = None
 
 
 class DocumentStatusResponse(BaseModel):

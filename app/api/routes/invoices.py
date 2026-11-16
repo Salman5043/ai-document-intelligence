@@ -3,14 +3,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.agent.state import InvoiceExtractionState
 from app.api.schemas import InvoiceCorrection
 from app.database.models import Invoice
 from app.database.repository import add_processing_event
 from app.database.session import get_db
 from app.extraction.schemas import InvoiceExtraction
 from app.validation.validator import validate_invoice
-
 
 router = APIRouter(
     prefix="/invoices",

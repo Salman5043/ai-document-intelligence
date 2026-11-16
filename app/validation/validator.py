@@ -4,7 +4,6 @@ from decimal import Decimal, InvalidOperation
 
 from app.extraction.schemas import InvoiceExtraction
 
-
 TOLERANCE = Decimal("0.02")
 
 REQUIRED_FIELDS = [
@@ -106,7 +105,7 @@ def validate_invoice(
 
     if invoice.line_items and len(line_item_amounts) == len(invoice.line_items):
         calculated_subtotal = sum(
-            line_item_amounts, Decimal("0")
+            line_item_amounts, Decimal(0)
         )
 
         subtotal_valid = amounts_match(

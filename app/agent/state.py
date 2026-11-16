@@ -1,5 +1,5 @@
 
-from typing import Any, Optional, TypedDict
+from typing import Any, TypedDict
 
 from app.extraction.schemas import InvoiceExtraction
 
@@ -7,13 +7,13 @@ from app.extraction.schemas import InvoiceExtraction
 class InvoiceExtractionState(TypedDict):
     document: dict[str, Any]
     document_text: str
-    extraction: Optional[InvoiceExtraction]
+    extraction: InvoiceExtraction | None
 
     # Previously processed invoices for duplicate checking
     existing_invoices: list[dict[str, Any]]
 
     # Validation result
-    validation: Optional[dict[str, Any]]
+    validation: dict[str, Any] | None
 
     errors: list[str]
     warnings: list[str]

@@ -9,7 +9,6 @@ from app.document_processing.models import (
 )
 from app.document_processing.ocr_engine import extract_image_text
 
-
 SUPPORTED_IMAGES = {
     ".jpg",
     ".jpeg",

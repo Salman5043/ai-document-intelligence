@@ -3,7 +3,6 @@ from app.agent.state import InvoiceExtractionState
 from app.extraction.llm import get_llm
 from app.extraction.schemas import InvoiceExtraction
 
-
 EXTRACTION_PROMPT = """
 You are an expert invoice data extraction system.
 
@@ -71,6 +70,7 @@ def prepare_document(state: InvoiceExtractionState):
     }
 
 
+
 def extract_invoice(state: InvoiceExtractionState):
     document_text = state.get("document_text", "")
 
@@ -101,10 +101,10 @@ def extract_invoice(state: InvoiceExtractionState):
             "errors": [],
         }
 
-    except Exception as exc:
+    except Exception as exc: # noqa: BLE001 
         return {
             "extraction": None,
             "errors": [
-                f"Invoice extraction failed: {str(exc)}"
+                f"Invoice extraction failed: {exc!s}"
             ],
         }

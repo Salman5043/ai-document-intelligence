@@ -1,14 +1,14 @@
 
 from pathlib import Path
 
+from app.document_processing.csv_processor import process_csv
+from app.document_processing.excel_processor import process_excel
+from app.document_processing.image_processor import process_image
 from app.document_processing.models import (
     DocumentContent,
     DocumentProcessingError,
 )
 from app.document_processing.pdf_processor import process_pdf
-from app.document_processing.image_processor import process_image
-from app.document_processing.excel_processor import process_excel
-from app.document_processing.csv_processor import process_csv
 
 
 def process_document(

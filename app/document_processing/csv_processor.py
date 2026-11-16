@@ -41,7 +41,12 @@ def process_csv(file_path: str | Path) -> DocumentContent:
             )
             break
 
-        except Exception as exc:
+        except (
+            UnicodeDecodeError,
+            pd.errors.ParserError,
+            OSError,
+            ValueError,
+        ) as exc:
             last_error = exc
 
     if dataframe is None:

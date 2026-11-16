@@ -7,7 +7,6 @@ import easyocr
 import numpy as np
 from PIL import Image, ImageOps
 
-
 MAX_OCR_DIMENSION = 1600
 
 # Prevent concurrent OCR inference within this process.

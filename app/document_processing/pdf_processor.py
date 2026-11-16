@@ -9,7 +9,6 @@ from app.document_processing.models import (
 )
 from app.document_processing.ocr_engine import extract_image_text
 
-
 OCR_MIN_CHARACTERS = 40
 
 
@@ -31,64 +30,66 @@ def process_pdf(file_path: str | Path) -> DocumentContent:
     all_text = []
 
     try:
-        document = pymupdf.open(path)
+        with pymupdf.open(path) as document:
 
-        if document.is_encrypted:
-            raise DocumentProcessingError(
-                "Encrypted PDF cannot be processed"
-            )
+            if document.is_encrypted:
+                raise DocumentProcessingError(
+                    "Encrypted PDF cannot be processed"
+                )
 
-        if len(document) == 0:
-            raise DocumentProcessingError(
-                "PDF contains no pages"
-            )
+            if len(document) == 0:
+                raise DocumentProcessingError(
+                    "PDF contains no pages"
+                )
 
-        for page_index, page in enumerate(document):
-            text = page.get_text("text").strip()
-            method = "digital_pdf"
+            for page_index, page in enumerate(document):
+                text = page.get_text("text").strip()
+                method = "digital_pdf"
 
-            if len(text) < OCR_MIN_CHARACTERS:
-                try:
-                    pixmap = page.get_pixmap(
-                        matrix=fitz.Matrix(2, 2),
-                        alpha=False
-                    )
-
-                    image_bytes = pixmap.tobytes("png")
-                    ocr_text = extract_image_text(image_bytes)
-
-                    if ocr_text.strip():
-                        text = ocr_text.strip()
-                        method = "ocr"
-
-                    else:
-                        warnings.append(
-                            f"Page {page_index + 1}: "
-                            "No readable text found"
+                if len(text) < OCR_MIN_CHARACTERS:
+                    try:
+                        pixmap = page.get_pixmap(
+                            matrix=pymupdf.Matrix(2, 2),
+                            alpha=False,
                         )
 
-                except Exception as exc:
-                    warnings.append(
-                        f"Page {page_index + 1}: "
-                        f"OCR failed: {exc}"
-                    )
+                        image_bytes = pixmap.tobytes("png")
+                        ocr_text = extract_image_text(image_bytes)
 
-            pages.append({
-                "page_number": page_index + 1,
-                "text": text,
-                "extraction_method": method,
-                "character_count": len(text),
-            })
+                        if ocr_text.strip():
+                            text = ocr_text.strip()
+                            method = "ocr"
 
-            all_text.append(text)
+                        else:
+                            warnings.append(
+                                f"Page {page_index + 1}: "
+                                "No readable text found"
+                            )
 
-        metadata = {
-            "page_count": len(document),
-            "title": document.metadata.get("title"),
-            "author": document.metadata.get("author"),
-        }
+                    except (
+                        RuntimeError,
+                        ValueError,
+                        OSError,
+                    ) as exc:
+                        warnings.append(
+                            f"Page {page_index + 1}: "
+                            f"OCR failed: {exc}"
+                        )
 
-        document.close()
+                pages.append({
+                    "page_number": page_index + 1,
+                    "text": text,
+                    "extraction_method": method,
+                    "character_count": len(text),
+                })
+
+                all_text.append(text)
+
+            metadata = {
+                "page_count": len(document),
+                "title": document.metadata.get("title"),
+                "author": document.metadata.get("author"),
+            }
 
         return DocumentContent(
             filename=path.name,
@@ -102,7 +103,7 @@ def process_pdf(file_path: str | Path) -> DocumentContent:
     except DocumentProcessingError:
         raise
 
-    except Exception as exc:
+    except Exception as exc:  
         raise DocumentProcessingError(
             f"Failed to process PDF: {exc}"
         ) from exc

@@ -1,32 +1,31 @@
 
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
 class InvoiceLineItem(BaseModel):
-    description: Optional[str] = Field(
+    description: str | None = Field(
         default=None,
         description="Description of the product or service"
     )
-    quantity: Optional[float] = None
-    unit_price: Optional[float] = None
-    amount: Optional[float] = None
+    quantity: float | None = None
+    unit_price: float | None = None
+    amount: float | None = None
 
 
 class InvoiceExtraction(BaseModel):
-    invoice_number: Optional[str] = None
-    invoice_date: Optional[str] = Field(
+    invoice_number: str | None = None
+    invoice_date: str | None = Field(
         default=None,
         description="Invoice date in YYYY-MM-DD format when unambiguous"
     )
-    supplier_name: Optional[str] = None
-    customer_name: Optional[str] = None
+    supplier_name: str | None = None
+    customer_name: str | None = None
 
-    subtotal: Optional[float] = None
-    tax: Optional[float] = None
-    total: Optional[float] = None
-    currency: Optional[str] = None
+    subtotal: float | None = None
+    tax: float | None = None
+    total: float | None = None
+    currency: str | None = None
 
     line_items: list[InvoiceLineItem] = Field(default_factory=list)
 

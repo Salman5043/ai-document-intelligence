@@ -2,8 +2,8 @@
 from langgraph.graph import END, START, StateGraph
 
 from app.agent.nodes import (
-    prepare_document,
     extract_invoice,
+    prepare_document,
 )
 from app.agent.state import InvoiceExtractionState
 from app.agent.validation_node import validate_extracted_invoice
