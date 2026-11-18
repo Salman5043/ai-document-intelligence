@@ -7,8 +7,9 @@ from kombu.exceptions import KombuError
 from sqlalchemy import select, update
 from sqlalchemy.orm import sessionmaker
 
-from app.database.models import Document, Invoice
+from app.database.models import Document, DocumentChunk, Invoice
 from app.workers import tasks as tasks_module
+
 
 # ---------------------------------------------------------
 # Test doubles
@@ -136,6 +137,30 @@ def create_test_invoice(db, document_id, invoice_number="INV-OLD-1001"):
     return invoice
 
 
+def create_test_chunk(
+    db,
+    document_id,
+    content="Previously stored document content",
+    chunk_index=0,
+):
+    chunk = DocumentChunk(
+        document_id=document_id,
+        chunk_index=chunk_index,
+        content=content,
+        source={
+            "filename": "test_invoice.pdf",
+            "page_number": 1,
+        },
+        metadata_json={},
+        embedding=[0.2] * 384,
+    )
+
+    db.add(chunk)
+    db.flush()
+
+    return chunk
+
+
 def create_processing_document(
     db,
     *,
@@ -176,6 +201,7 @@ def worker_environment(db_session, monkeypatch, tmp_path):
     Run the worker against the existing test database.
 
     External document processing and AI extraction are mocked.
+    Chunk generation and embedding generation are controlled.
     Database operations remain real.
     """
 
@@ -205,6 +231,37 @@ def worker_environment(db_session, monkeypatch, tmp_path):
         FakeGraph(),
     )
 
+    # Provide deterministic chunks for worker tests.
+    monkeypatch.setattr(
+        tasks_module,
+        "chunk_document",
+        lambda document: [
+            {
+                "chunk_id": "chunk_000001",
+                "content": (
+                    "Invoice INV-NEW-1002. "
+                    "Total: 1650.00 BDT."
+                ),
+                "source": {
+                    "filename": "test_invoice.pdf",
+                    "file_type": "pdf",
+                    "page_number": 1,
+                },
+                "metadata": {
+                    "extraction_method": "digital",
+                },
+            }
+        ],
+    )
+
+    # Avoid loading the real embedding model in unit tests.
+    monkeypatch.setattr(
+        "app.database.repository.generate_embeddings",
+        lambda texts: [
+            [0.1] * 384 for _ in texts
+        ],
+    )
+
     uploaded_file = tmp_path / "test_invoice.pdf"
     uploaded_file.write_bytes(b"test invoice content")
 
@@ -232,6 +289,7 @@ def test_worker_successfully_processes_document(
     assert result["document_id"] == document.id
     assert result["status"] == "processed"
     assert result["valid"] is True
+    assert result["chunk_count"] == 1
 
     invoices = db_session.scalars(
         select(Invoice).where(
@@ -242,6 +300,21 @@ def test_worker_successfully_processes_document(
     assert len(invoices) == 1
     assert invoices[0].invoice_number == "INV-NEW-1002"
     assert invoices[0].total == Decimal("1650.00")
+
+    chunks = db_session.scalars(
+        select(DocumentChunk).where(
+            DocumentChunk.document_id == document.id
+        )
+    ).all()
+
+    assert len(chunks) == 1
+    assert chunks[0].content == (
+        "Invoice INV-NEW-1002. Total: 1650.00 BDT."
+    )
+    assert chunks[0].chunk_index == 0
+    assert chunks[0].source["page_number"] == 1
+    assert chunks[0].embedding is not None
+    assert len(chunks[0].embedding) == 384
 
 
 def test_worker_reprocessing_replaces_existing_invoice(
@@ -276,6 +349,68 @@ def test_worker_reprocessing_replaces_existing_invoice(
     assert invoices[0].total == Decimal("1650.00")
     assert invoices[0].supplier_name == "ABC Supplies"
 
+
+def test_worker_reprocessing_replaces_existing_chunks(
+    db_session,
+    worker_environment,
+    monkeypatch,
+):
+    document = create_test_document(
+        db_session,
+        worker_environment,
+        status="queued",
+    )
+
+    old_chunk = create_test_chunk(
+        db_session,
+        document.id,
+    )
+    old_chunk_content = old_chunk.content
+
+    db_session.flush()
+
+    new_chunk_content = "Newly processed document content"
+
+    monkeypatch.setattr(
+        tasks_module,
+        "chunk_document",
+        lambda document_data: [
+            {
+                "chunk_id": "chunk_000001",
+                "content": new_chunk_content,
+                "source": {
+                    "filename": document.filename,
+                    "file_type": document.file_type,
+                    "page_number": 1,
+                },
+                "metadata": {},
+            }
+        ],
+    )
+
+    result = tasks_module.process_uploaded_document.run(
+        document.id
+    )
+
+    assert result["status"] == "processed"
+    assert result["chunk_count"] == 1
+
+    # Clear SQLAlchemy's cached objects before querying again.
+    db_session.expire_all()
+
+    chunks = db_session.scalars(
+        select(DocumentChunk).where(
+            DocumentChunk.document_id == document.id
+        )
+    ).all()
+
+    assert len(chunks) == 1
+
+    new_chunk = chunks[0]
+
+    assert new_chunk.content == new_chunk_content
+    assert new_chunk.content != old_chunk_content
+    assert new_chunk.chunk_index == 0
 
 def test_worker_failure_preserves_previous_invoice(
     db_session,
@@ -392,7 +527,7 @@ def test_worker_transaction_rollback_preserves_previous_invoice(
         message=None,
         details=None,
     ):
-        if status == "completed":
+        if stage == "pipeline" and status == "completed":
             raise RuntimeError(
                 "Simulated completion transaction failure"
             )
@@ -433,6 +568,114 @@ def test_worker_transaction_rollback_preserves_previous_invoice(
     db_session.refresh(document)
 
     assert document.status == "failed"
+
+
+# ---------------------------------------------------------
+# Chunk persistence and transaction tests
+# ---------------------------------------------------------
+
+
+def test_worker_transaction_rollback_preserves_previous_chunks(
+    db_session,
+    worker_environment,
+    monkeypatch,
+):
+    document = create_test_document(
+        db_session,
+        worker_environment,
+        status="queued",
+    )
+
+    old_chunk = create_test_chunk(
+        db_session,
+        document.id,
+    )
+
+    old_chunk_id = old_chunk.id
+
+    original_add_processing_event = (
+        tasks_module.add_processing_event
+    )
+
+    def failing_completion_event(
+        db,
+        document_id,
+        stage,
+        status,
+        message=None,
+        details=None,
+    ):
+        if stage == "pipeline" and status == "completed":
+            raise RuntimeError(
+                "Simulated completion transaction failure"
+            )
+
+        return original_add_processing_event(
+            db=db,
+            document_id=document_id,
+            stage=stage,
+            status=status,
+            message=message,
+            details=details,
+        )
+
+    monkeypatch.setattr(
+        tasks_module,
+        "add_processing_event",
+        failing_completion_event,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Simulated completion transaction failure",
+    ):
+        tasks_module.process_uploaded_document.run(
+            document.id
+        )
+
+    chunks = db_session.scalars(
+        select(DocumentChunk).where(
+            DocumentChunk.document_id == document.id
+        )
+    ).all()
+
+    assert len(chunks) == 1
+    assert chunks[0].id == old_chunk_id
+    assert chunks[0].content == (
+        "Previously stored document content"
+    )
+
+    db_session.refresh(document)
+
+    assert document.status == "failed"
+
+
+def test_worker_records_chunk_count_in_completion_event(
+    db_session,
+    worker_environment,
+):
+    document = create_test_document(
+        db_session,
+        worker_environment,
+    )
+
+    result = tasks_module.process_uploaded_document.run(
+        document.id
+    )
+
+    assert result["chunk_count"] == 1
+
+    db_session.refresh(document)
+
+    completion_events = [
+        event
+        for event in document.events
+        if event.stage == "pipeline"
+        and event.status == "completed"
+    ]
+
+    assert len(completion_events) == 1
+    assert completion_events[0].details["chunk_count"] == 1
 
 
 # ---------------------------------------------------------
@@ -891,11 +1134,17 @@ def test_recovery_does_not_recover_document_with_changed_lease_token(
     assert document.processing_token == "new-worker-token"
 
 
+# ---------------------------------------------------------
+# Processing heartbeat tests
+# ---------------------------------------------------------
+
+
 def test_heartbeat_renews_lease_when_worker_owns_document(
     db_session,
     worker_environment,
 ):
     now = datetime.now(UTC)
+
     document = create_processing_document(
         db_session,
         processing_started_at=now,
@@ -923,6 +1172,7 @@ def test_heartbeat_does_not_renew_lease_after_token_changes(
     worker_environment,
 ):
     now = datetime.now(UTC)
+
     document = create_processing_document(
         db_session,
         processing_started_at=now,
@@ -967,6 +1217,7 @@ def test_heartbeat_marks_lease_lost_when_renewal_fails(
         "_stop_event",
         ControlledEvent(),
     )
+
     monkeypatch.setattr(
         heartbeat,
         "_renew_lease",
@@ -1010,6 +1261,7 @@ def test_heartbeat_retries_after_temporary_database_error(
         "_stop_event",
         ControlledEvent(),
     )
+
     monkeypatch.setattr(
         heartbeat,
         "_renew_lease",

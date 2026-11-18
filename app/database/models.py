@@ -13,6 +13,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -139,6 +140,74 @@ class Document(Base):
         cascade="all, delete-orphan",
     )
 
+    chunks: Mapped[list["DocumentChunk"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
+
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id",
+            "chunk_index",
+            name="uq_document_chunks_document_index",
+        ),
+        Index(
+            "ix_document_chunks_document_index",
+            "document_id",
+            "chunk_index",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    chunk_index: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+
+    content: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    source: Mapped[dict] = mapped_column(
+        JSON,
+        default=dict,
+        nullable=False,
+    )
+
+    metadata_json: Mapped[dict] = mapped_column(
+        JSON,
+        default=dict,
+        nullable=False,
+    )
+
+    embedding: Mapped[list | None] = mapped_column(
+        Vector(384),
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+    )
+
+    document: Mapped["Document"] = relationship(
+        back_populates="chunks",
+    )
+
 
 class Invoice(Base):
     __tablename__ = "invoices"
@@ -243,6 +312,28 @@ class Invoice(Base):
 
     document: Mapped["Document"] = relationship(
         back_populates="invoices",
+    )
+
+    due_date: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+
+    discount: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+
+    confidence_scores: Mapped[dict] = mapped_column(
+        JSON,
+        default=dict,
+        nullable=False,
+    )
+
+    field_evidence: Mapped[dict] = mapped_column(
+        JSON,
+        default=dict,
+        nullable=False,
     )
 
     __table_args__ = (

@@ -15,9 +15,11 @@ from app.database.models import Document, Invoice
 from app.database.repository import (
     add_processing_event,
     find_duplicate_invoice,
+    save_document_chunks,
     save_invoice,
 )
 from app.database.session import SessionLocal
+from app.document_processing.chunker import chunk_document
 from app.document_processing.dispatcher import process_document
 from app.workers.celery_app import celery_app
 
@@ -219,8 +221,8 @@ def process_uploaded_document(self, document_id: int):
     Process an uploaded document with lease-based ownership.
 
     Pipeline:
-    document processing -> extraction -> validation ->
-    transactional invoice replacement.
+    document processing -> chunk generation -> invoice extraction
+    -> validation -> embeddings -> transactional persistence.
 
     A background heartbeat keeps long-running processing leases
     alive. A worker may commit results only while it owns the
@@ -332,7 +334,19 @@ def process_uploaded_document(self, document_id: int):
             document_data["file_type"] = document.file_type
 
             # -------------------------------------------------
-            # 5. Run extraction and validation
+            # 5. Generate source-aware document chunks
+            # -------------------------------------------------
+
+            chunks = chunk_document(document_data)
+
+            logger.info(
+                "Generated %s chunks for document %s.",
+                len(chunks),
+                document_id,
+            )
+
+            # -------------------------------------------------
+            # 6. Run invoice extraction and validation
             # -------------------------------------------------
 
             graph_result = invoice_extraction_graph.invoke({
@@ -363,7 +377,7 @@ def process_uploaded_document(self, document_id: int):
             validation_data = dict(validation)
 
             # -------------------------------------------------
-            # 6. Check duplicate invoices across documents
+            # 7. Check duplicate invoices across documents
             # -------------------------------------------------
 
             supplier = invoice_data.get("supplier_name")
@@ -395,7 +409,7 @@ def process_uploaded_document(self, document_id: int):
                     }
 
             # -------------------------------------------------
-            # 7. Verify heartbeat and ownership before persistence
+            # 8. Verify heartbeat and ownership before persistence
             # -------------------------------------------------
 
             if heartbeat.lease_lost:
@@ -411,7 +425,7 @@ def process_uploaded_document(self, document_id: int):
             )
 
             # -------------------------------------------------
-            # 8. Update extracted document data
+            # 9. Update extracted document data
             # -------------------------------------------------
 
             document.extracted_text = document_data.get(
@@ -434,7 +448,7 @@ def process_uploaded_document(self, document_id: int):
             document.warnings = graph_result.get("warnings", [])
 
             # -------------------------------------------------
-            # 9. Generate document embedding
+            # 10. Generate document-level embedding
             # -------------------------------------------------
 
             if document.extracted_text.strip():
@@ -443,9 +457,30 @@ def process_uploaded_document(self, document_id: int):
                 document.embedding = generate_embedding(
                     document.extracted_text
                 )
+            else:
+                document.embedding = None
 
             # -------------------------------------------------
-            # 10. Replace previous invoice transactionally
+            # 11. Persist chunks and chunk embeddings
+            # -------------------------------------------------
+
+            saved_chunks = save_document_chunks(
+                db=db,
+                document_id=document_id,
+                chunks=chunks,
+                commit=False,
+            )
+
+            chunk_count = len(saved_chunks)
+
+            logger.info(
+                "Persisted %s chunks for document %s.",
+                chunk_count,
+                document_id,
+            )
+
+            # -------------------------------------------------
+            # 12. Replace previous invoice transactionally
             # -------------------------------------------------
 
             db.execute(
@@ -463,7 +498,7 @@ def process_uploaded_document(self, document_id: int):
             )
 
             # -------------------------------------------------
-            # 11. Complete processing and release lease
+            # 13. Complete processing and release lease
             # -------------------------------------------------
 
             if heartbeat.lease_lost:
@@ -485,16 +520,20 @@ def process_uploaded_document(self, document_id: int):
                 message="Document processing completed.",
                 details={
                     "invoice_id": invoice.id,
+                    "chunk_count": chunk_count,
                     "valid": invoice.valid,
                     "review_required": invoice.review_required,
                 },
             )
 
+            # Document data, document embedding, chunks, invoice,
+            # and completion event are committed together.
             db.commit()
 
             return {
                 "document_id": document.id,
                 "invoice_id": invoice.id,
+                "chunk_count": chunk_count,
                 "status": document.status,
                 "valid": invoice.valid,
                 "review_required": invoice.review_required,
@@ -508,7 +547,7 @@ def process_uploaded_document(self, document_id: int):
             db.rollback()
 
             # -------------------------------------------------
-            # 12. Confirm this worker still owns the document
+            # 14. Confirm this worker still owns the document
             # -------------------------------------------------
 
             failed_document = db.scalar(
@@ -534,7 +573,7 @@ def process_uploaded_document(self, document_id: int):
             )
 
             # -------------------------------------------------
-            # 13. Record retry or permanent failure
+            # 15. Record retry or permanent failure
             # -------------------------------------------------
 
             if will_retry:
@@ -583,7 +622,7 @@ def process_uploaded_document(self, document_id: int):
             db.commit()
 
             # -------------------------------------------------
-            # 14. Ask Celery to retry transient failures
+            # 16. Ask Celery to retry transient failures
             # -------------------------------------------------
 
             if will_retry:

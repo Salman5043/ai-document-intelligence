@@ -1,20 +1,28 @@
 
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, delete
 from sqlalchemy.orm import Session
 
-from app.database.embeddings import generate_embedding
-from app.database.models import Document, Invoice, ProcessingEvent
+from app.database.embeddings import generate_embedding, generate_embeddings
+from app.database.models import Document, Invoice, ProcessingEvent, DocumentChunk
 
 
 def to_decimal(value):
-    """Convert a numeric value to Decimal safely."""
+    """Convert a numeric value to a finite Decimal safely."""
     if value is None:
         return None
 
     try:
-        return Decimal(str(value))
+        result = Decimal(str(value))
+
+        if not result.is_finite():
+            raise ValueError(
+                f"Monetary value must be finite: {value}"
+            )
+
+        return result
+
     except (InvalidOperation, ValueError, TypeError) as exc:
         raise ValueError(
             f"Invalid monetary value: {value}"
@@ -155,27 +163,35 @@ def save_invoice(
     invoice = Invoice(
         document_id=document_id,
 
+        # Invoice identification
         invoice_number=extraction.get("invoice_number"),
         invoice_date=extraction.get("invoice_date"),
+        due_date=extraction.get("due_date"),
 
+        # Parties
         supplier_name=extraction.get("supplier_name"),
         customer_name=extraction.get("customer_name"),
 
+        # Financial information
         subtotal=to_decimal(extraction.get("subtotal")),
         tax=to_decimal(extraction.get("tax")),
+        discount=to_decimal(extraction.get("discount")),
         total=to_decimal(extraction.get("total")),
-
         currency=extraction.get("currency"),
 
+        # Extracted line items
         line_items=extraction.get("line_items", []),
 
+        # Extraction quality and evidence
+        confidence_scores=extraction.get("confidence_scores") or {},
+        field_evidence=extraction.get("field_evidence") or {},
         missing_fields=extraction.get("missing_fields", []),
         uncertain_fields=extraction.get("uncertain_fields", []),
         extraction_notes=extraction.get("extraction_notes", []),
 
+        # Validation results
         valid=validation.get("valid", False),
         review_required=validation.get("review_required", True),
-
         validation_errors=validation.get("errors", []),
         validation_warnings=validation.get("warnings", []),
     )
@@ -201,3 +217,78 @@ def save_invoice(
         db.refresh(invoice)
 
     return invoice
+
+
+def save_document_chunks(
+    db: Session,
+    document_id: int,
+    chunks: list[dict],
+    commit: bool = False,
+):
+    """
+    Replace and persist a document's chunks and embeddings.
+
+    Uses the existing transaction unless commit=True.
+    Existing chunks are replaced atomically with the new set.
+    """
+
+    if not chunks:
+        db.execute(
+            delete(DocumentChunk).where(
+                DocumentChunk.document_id == document_id
+            )
+        )
+
+        if commit:
+            db.commit()
+
+        return []
+
+    contents = []
+
+    for chunk in chunks:
+        content = chunk.get("content")
+
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Every chunk must have non-empty content.")
+
+        contents.append(content)
+
+    embeddings = generate_embeddings(contents)
+
+    if len(embeddings) != len(chunks):
+        raise RuntimeError("Chunk and embedding counts do not match.")
+
+    # Replace previous chunks during reprocessing.
+    db.execute(
+        delete(DocumentChunk).where(
+            DocumentChunk.document_id == document_id
+        )
+    )
+
+    chunk_records = []
+
+    for index, (chunk, embedding) in enumerate(
+        zip(chunks, embeddings)
+    ):
+        record = DocumentChunk(
+            document_id=document_id,
+            chunk_index=index,
+            content=chunk["content"],
+            source=chunk.get("source") or {},
+            metadata_json=chunk.get("metadata") or {},
+            embedding=embedding,
+        )
+
+        chunk_records.append(record)
+
+    db.add_all(chunk_records)
+    db.flush()
+
+    if commit:
+        db.commit()
+
+        for record in chunk_records:
+            db.refresh(record)
+
+    return chunk_records
