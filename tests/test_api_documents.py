@@ -7,7 +7,7 @@ from kombu.exceptions import KombuError
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.routes import documents as documents_module
-from app.database.models import Document, Invoice
+from app.database.models import Document, Invoice, DocumentChunk
 
 # -------------------------------------------------------------------
 # Helpers
@@ -739,3 +739,153 @@ def test_reprocess_queue_failure(
 
     assert len(existing_invoices) == 1
     assert existing_invoices[0].id == original_invoice.id
+
+
+# -------------------------------------------------------------------
+# Chunk-level document search tests
+# -------------------------------------------------------------------
+
+def test_chunk_search_success(
+    client,
+    db_session,
+    monkeypatch,
+):
+    document = create_document(
+        db_session,
+        status="processed",
+    )
+
+    chunk = DocumentChunk(
+        document_id=document.id,
+        chunk_index=0,
+        content="Invoice total amount is BDT 115.00",
+        source={
+            "filename": "sample.pdf",
+            "page_number": 2,
+        },
+        metadata_json={
+            "extraction_method": "digital",
+        },
+        embedding=[0.1] * 384,
+    )
+
+    db_session.add(chunk)
+    db_session.commit()
+    db_session.refresh(chunk)
+
+    monkeypatch.setattr(
+        documents_module,
+        "semantic_chunk_search",
+        lambda db, query, limit: [
+            {
+                "chunk": chunk,
+                "document": document,
+                "similarity_distance": 0.12,
+                "similarity_score": 0.88,
+                "source": chunk.source,
+                "metadata": chunk.metadata_json,
+            }
+        ],
+    )
+
+    response = client.get(
+        "/documents/search",
+        params={
+            "q": "What is the invoice total?",
+            "mode": "chunks",
+            "limit": 5,
+        },
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert len(data) == 1
+
+    result = data[0]
+
+    assert result["chunk_id"] == chunk.id
+    assert result["document_id"] == document.id
+    assert result["filename"] == "sample.pdf"
+    assert result["status"] == "processed"
+    assert result["chunk_index"] == 0
+
+    assert result["content"] == (
+        "Invoice total amount is BDT 115.00"
+    )
+
+    assert result["distance"] == pytest.approx(0.12)
+    assert result["similarity_score"] == pytest.approx(0.88)
+
+    assert result["source"]["page_number"] == 2
+    assert result["metadata"]["extraction_method"] == "digital"
+
+
+def test_chunk_search_returns_empty_results(
+    client,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        documents_module,
+        "semantic_chunk_search",
+        lambda db, query, limit: [],
+    )
+
+    response = client.get(
+        "/documents/search",
+        params={
+            "q": "nonexistent information",
+            "mode": "chunks",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_chunk_search_respects_limit(
+    client,
+    monkeypatch,
+):
+    captured = {}
+
+    def fake_chunk_search(db, query, limit):
+        captured["query"] = query
+        captured["limit"] = limit
+        return []
+
+    monkeypatch.setattr(
+        documents_module,
+        "semantic_chunk_search",
+        fake_chunk_search,
+    )
+
+    response = client.get(
+        "/documents/search",
+        params={
+            "q": "invoice",
+            "mode": "chunks",
+            "limit": 5,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["query"] == "invoice"
+    assert captured["limit"] == 5
+
+
+def test_search_rejects_invalid_chunk_search_limit(
+    client,
+):
+    response = client.get(
+        "/documents/search",
+        params={
+            "q": "invoice",
+            "mode": "chunks",
+            "limit": 101,
+        },
+    )
+
+    assert response.status_code == 422

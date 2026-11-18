@@ -16,3 +16,21 @@ data/repositories/
 
 *.log
 .DS_Store
+# Environment files
+.env.*
+!.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# Test and coverage reports
+.coverage
+.coverage.*
+htmlcov/
+
+# Frontend dependencies and production builds
+frontend/node_modules/
+frontend/dist/
+
+# Uploaded documents
+storage/uploads/

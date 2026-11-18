@@ -1,4 +1,5 @@
 
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,3 +26,42 @@ class DocumentStatusResponse(BaseModel):
     warnings: list = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DocumentSearchResult(BaseModel):
+    document_id: int
+    filename: str
+    status: str
+
+
+class SemanticDocumentSearchResult(DocumentSearchResult):
+    distance: float
+    similarity_score: float | None = None
+
+
+class ChunkSearchResult(SemanticDocumentSearchResult):
+    chunk_id: int
+    chunk_index: int
+    content: str
+    source: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+class DocumentQuestionRequest(BaseModel):
+    question: str = Field(
+        min_length=1,
+        max_length=2000,
+    )
+
+    retrieval_limit: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+    )
+
+
+class DocumentQuestionResponse(BaseModel):
+    document_id: int
+    question: str
+    answer: str
+    insufficient_evidence: bool
+    sources: list[dict[str, Any]] = Field(default_factory=list)

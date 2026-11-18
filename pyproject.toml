@@ -1,7 +1,7 @@
 [project]
 name = "ai-document-intelligence"
 version = "0.1.0"
-description = "Add your description here"
+description = "AI-powered document intelligence for OCR, invoice extraction, financial validation, and semantic search."
 readme = "README.md"
 authors = [
     { name = "Salman Sayem", email = "sayem.salman.504@gmail.com" }
@@ -35,9 +35,6 @@ dependencies = [
     "uvicorn[standard]>=0.54.0",
     "xlrd>=2.0.2",
 ]
-
-[project.scripts]
-ai-document-intelligence = "ai_document_intelligence:main"
 
 [build-system]
 requires = ["uv_build>=0.11.15,<0.12.0"]

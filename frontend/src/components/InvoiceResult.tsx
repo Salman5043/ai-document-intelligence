@@ -1,9 +1,6 @@
 
 import { useCallback, useEffect, useState } from "react";
-import {
-  correctInvoice,
-  getDocumentResult,
-} from "../services/api";
+import { correctInvoice, getDocumentResult } from "../services/api";
 
 interface Props {
   documentId: number | string;
@@ -31,17 +28,6 @@ interface Invoice {
   validation_warnings?: string[];
 }
 
-const editableFields = [
-  "invoice_number",
-  "invoice_date",
-  "supplier_name",
-  "customer_name",
-  "subtotal",
-  "tax",
-  "total",
-  "currency",
-] as const;
-
 export default function InvoiceResult({ documentId }: Props) {
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,14 +35,51 @@ export default function InvoiceResult({ documentId }: Props) {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
-  const loadResult = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  // Fetch the invoice after the component mounts or document ID changes.
+  useEffect(() => {
+    let active = true;
 
+    async function fetchInvoice() {
+      try {
+        const data = await getDocumentResult(documentId);
+
+        if (!active) return;
+
+        const extractedInvoice = data.invoices?.[0];
+
+        if (!extractedInvoice) {
+          setInvoice(null);
+          setError("No invoice record was found for this document.");
+          return;
+        }
+
+        setInvoice(extractedInvoice);
+        setError("");
+      } catch (err: any) {
+        if (!active) return;
+
+        setError(
+          err.response?.data?.detail ||
+            "Unable to load the extracted invoice."
+        );
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    }
+
+    fetchInvoice();
+
+    return () => {
+      active = false;
+    };
+  }, [documentId]);
+
+  // Reload the latest server-side invoice after saving corrections.
+  const loadResult = useCallback(async () => {
     try {
       const data = await getDocumentResult(documentId);
-
-      // The API returns "invoices", not "invoice".
       const extractedInvoice = data.invoices?.[0];
 
       if (!extractedInvoice) {
@@ -66,19 +89,14 @@ export default function InvoiceResult({ documentId }: Props) {
       }
 
       setInvoice(extractedInvoice);
+      setError("");
     } catch (err: any) {
       setError(
         err.response?.data?.detail ||
           "Unable to load the extracted invoice."
       );
-    } finally {
-      setLoading(false);
     }
   }, [documentId]);
-
-  useEffect(() => {
-    loadResult();
-  }, [loadResult]);
 
   function updateField(field: string, value: string) {
     setInvoice((current) => {
@@ -107,29 +125,32 @@ export default function InvoiceResult({ documentId }: Props) {
         supplier_name: invoice.supplier_name || null,
         customer_name: invoice.customer_name || null,
         subtotal:
-          invoice.subtotal === null || invoice.subtotal === undefined ||
+          invoice.subtotal === null ||
+          invoice.subtotal === undefined ||
           invoice.subtotal === ""
             ? null
             : Number(invoice.subtotal),
         tax:
-          invoice.tax === null || invoice.tax === undefined ||
+          invoice.tax === null ||
+          invoice.tax === undefined ||
           invoice.tax === ""
             ? null
             : Number(invoice.tax),
         total:
-          invoice.total === null || invoice.total === undefined ||
+          invoice.total === null ||
+          invoice.total === undefined ||
           invoice.total === ""
             ? null
             : Number(invoice.total),
         currency: invoice.currency || null,
       };
 
-      // Important: use invoice ID (3), not document ID (9).
+      // Use the invoice ID, not the document ID.
       await correctInvoice(invoice.id, correction);
 
       setMessage("Invoice corrections saved successfully.");
 
-      // Reload the latest server-side values and validation result.
+      // Reload the latest values and validation result.
       await loadResult();
     } catch (err: any) {
       const detail = err.response?.data?.detail;
@@ -137,7 +158,9 @@ export default function InvoiceResult({ documentId }: Props) {
       setError(
         typeof detail === "string"
           ? detail
-          : JSON.stringify(detail || "Unable to save invoice corrections.")
+          : JSON.stringify(
+              detail || "Unable to save invoice corrections."
+            )
       );
     } finally {
       setSaving(false);
@@ -195,7 +218,11 @@ export default function InvoiceResult({ documentId }: Props) {
             <input
               type={field.type}
               step={field.type === "number" ? "0.01" : undefined}
-              value={(invoice as any)[field.name] ?? ""}
+              value={
+                (invoice as unknown as Record<string, string | number | null>)[
+                  field.name
+                ] ?? ""
+              }
               onChange={(event) =>
                 updateField(field.name, event.target.value)
               }
