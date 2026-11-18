@@ -26,6 +26,19 @@ def utc_now():
 class Document(Base):
     __tablename__ = "documents"
 
+    __table_args__ = (
+        Index(
+            "ix_documents_status_processing_started_at",
+            "status",
+            "processing_started_at",
+        ),
+        Index(
+            "ix_documents_status_processing_heartbeat_at",
+            "status",
+            "processing_heartbeat_at",
+        ),
+    )
+
     id: Mapped[int] = mapped_column(
         primary_key=True,
         autoincrement=True,
@@ -77,9 +90,31 @@ class Document(Base):
         default=list,
     )
 
-    # all-MiniLM-L6-v2 produces 384-dimensional vectors
+    # all-MiniLM-L6-v2 produces 384-dimensional vectors.
     embedding: Mapped[list | None] = mapped_column(
         Vector(384),
+        nullable=True,
+    )
+
+    storage_path: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
+    # Processing lease ownership.
+    processing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    # Last successful processing lease renewal.
+    processing_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    processing_token: Mapped[str | None] = mapped_column(
+        String(36),
         nullable=True,
     )
 
@@ -102,11 +137,6 @@ class Document(Base):
     events: Mapped[list["ProcessingEvent"]] = relationship(
         back_populates="document",
         cascade="all, delete-orphan",
-    )
-
-    storage_path: Mapped[str | None] = mapped_column(
-    String(500),
-    nullable=True,
     )
 
 

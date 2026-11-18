@@ -7,7 +7,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from app.agent.graph import invoice_extraction_graph
 
-
 sample_document = {
     "filename": "sample_invoice.pdf",
     "pages": [

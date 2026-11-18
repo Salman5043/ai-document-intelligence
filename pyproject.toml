@@ -45,3 +45,8 @@ build-backend = "uv_build"
 
 [tool.ruff.lint.per-file-ignores]
 "app/api/routes/*.py" = ["B008"]
+
+[dependency-groups]
+dev = [
+    "pytest-cov>=7.1.0",
+]

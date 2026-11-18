@@ -11,9 +11,6 @@ from app.database.search import keyword_search, semantic_search
 from app.database.session import SessionLocal, init_db
 
 
-
-
-
 def main():
     init_db()
 

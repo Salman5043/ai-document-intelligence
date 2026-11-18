@@ -12,7 +12,7 @@ from fastapi import (
     UploadFile,
 )
 from kombu.exceptions import KombuError
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -93,7 +93,6 @@ async def upload_document(
                 destination.write(chunk)
 
     except Exception:
-        # Cleanup boundary: remove partially uploaded files.
         file_path.unlink(missing_ok=True)
         raise
 
@@ -132,7 +131,11 @@ async def upload_document(
         document.errors = [
             "Could not queue document processing."
         ]
-        db.commit()
+
+        try:
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
 
         raise HTTPException(
             status_code=503,
@@ -278,40 +281,91 @@ def reprocess_document(
             detail="Original uploaded file is unavailable.",
         )
 
-    if document.status == "processing":
-        raise HTTPException(
-            status_code=409,
-            detail="Document is already being processed.",
+    # Preserve the current state in case queue submission fails.
+    previous_status = document.status
+    previous_errors = list(document.errors or [])
+    previous_warnings = list(document.warnings or [])
+
+    # Atomically claim the document for reprocessing.
+    # Only one request can transition it to "queued".
+    try:
+        result = db.execute(
+            update(Document)
+            .where(
+                Document.id == document_id,
+                Document.status.notin_(
+                    ["processing", "queued"]
+                ),
+            )
+            .values(
+                status="queued",
+                errors=[],
+                warnings=[],
+            )
+            .execution_options(synchronize_session=False)
         )
 
-    # Remove old invoice results before reprocessing.
-    for invoice in list(document.invoices):
-        db.delete(invoice)
+        if result.rowcount != 1:
+            db.rollback()
 
-    document.status = "uploaded"
-    document.errors = []
-    document.warnings = []
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Document is already queued "
+                    "or being processed."
+                ),
+            )
 
-    db.commit()
+        db.commit()
 
-    # Submit reprocessing task to Celery.
+    except HTTPException:
+        raise
+
+    except SQLAlchemyError as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=503,
+            detail="Could not prepare document for reprocessing.",
+        ) from exc
+
+    # Submit the task only after the atomic state transition.
     try:
-        process_uploaded_document.delay(document.id)
+        process_uploaded_document.delay(document_id)
 
     except KombuError as exc:
-        document.status = "failed"
-        document.errors = [
-            "Could not queue document for reprocessing."
-        ]
-        db.commit()
+        # Restore the previous state while recording the new
+        # queue submission failure.
+        try:
+            db.execute(
+                update(Document)
+                .where(
+                    Document.id == document_id,
+                    Document.status == "queued",
+                )
+                .values(
+                    status=previous_status,
+                    errors=[
+                        *previous_errors,
+                        "Could not queue document for reprocessing.",
+                    ],
+                    warnings=previous_warnings,
+                )
+                .execution_options(synchronize_session=False)
+            )
+
+            db.commit()
+
+        except SQLAlchemyError:
+            db.rollback()
 
         raise HTTPException(
             status_code=503,
             detail="Could not queue document for reprocessing.",
-        ) from exc
+        ) from exc   
 
     return {
-        "document_id": document.id,
-        "status": "uploaded",
+        "document_id": document_id,
+        "status": "queued",
         "message": "Document has been queued for reprocessing.",
     }

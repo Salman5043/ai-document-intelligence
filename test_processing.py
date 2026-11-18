@@ -2,12 +2,14 @@
 from pathlib import Path
 
 from app.document_processing.dispatcher import process_document
-
+from app.document_processing.models import DocumentProcessingError
 
 folder = Path("sample_documents")
 
-for file_path in folder.iterdir():
+if not folder.exists():
+    raise FileNotFoundError(f"Sample documents folder not found: {folder}")
 
+for file_path in folder.iterdir():
     if not file_path.is_file():
         continue
 
@@ -26,5 +28,5 @@ for file_path in folder.iterdir():
         print("\nExtracted text preview:")
         print(result.extracted_text[:1000])
 
-    except Exception as exc:
-        print("Processing failed:", exc)
+    except DocumentProcessingError as exc:
+        print("Document processing failed:", exc)

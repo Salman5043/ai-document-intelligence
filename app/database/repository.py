@@ -101,10 +101,12 @@ def save_document(
     return document
 
 
+
 def find_duplicate_invoice(
     db: Session,
     supplier_name: str,
     invoice_number: str,
+    exclude_document_id: int | None = None,
 ):
     """
     Find an existing invoice using supplier name
@@ -112,6 +114,9 @@ def find_duplicate_invoice(
 
     Comparison ignores leading/trailing whitespace
     and letter casing.
+
+    Optionally exclude invoices belonging to the
+    document currently being processed.
     """
 
     if not supplier_name or not invoice_number:
@@ -124,6 +129,11 @@ def find_duplicate_invoice(
         func.lower(func.trim(Invoice.supplier_name)) == supplier,
         func.lower(func.trim(Invoice.invoice_number)) == number,
     )
+
+    if exclude_document_id is not None:
+        statement = statement.where(
+            Invoice.document_id != exclude_document_id
+        )
 
     return db.scalar(statement)
 

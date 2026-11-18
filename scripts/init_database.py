@@ -9,7 +9,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from app.database import models  # noqa: F401
 from app.database.session import init_db
 
-
 if __name__ == "__main__":
     init_db()
     print("Database tables initialized successfully.")
